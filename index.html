@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treasure Hunt Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #07131f; --panel: #0b1c2b; --line: #173244; --mid: #2c566a;
+    --cyan: #31d8ff; --green: #7dffb7; --gold: #ffd56a; --red: #ff5d73;
+    --text: #e7f5ff; --dim: #7fa3b8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  section { position: relative; height: 540px; overflow: hidden; border-bottom: 1px solid var(--line); }
+  body.single section { height: 100vh; border: 0; }
+  section[hidden] { display: none; }
+
+  /* ---------- 3D view ---------- */
+  #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #stage canvas:active { cursor: grabbing; }
+  .hud { position: absolute; pointer-events: none; font-size: 12px; letter-spacing: .04em; }
+  .hud b { color: var(--cyan); font-weight: 700; }
+  #hud-tl { top: 12px; left: 14px; line-height: 1.7; text-shadow: 0 0 8px rgba(49,216,255,.35); }
+  #hud-tl .title { color: var(--gold); font-weight: 700; font-size: 13px; }
+  #hud-tr { top: 12px; right: 14px; color: var(--dim); text-align: right; }
+  #hud-bl { bottom: 14px; left: 14px; color: var(--dim); }
+  .bar { width: 150px; height: 8px; margin-top: 4px; border-radius: 4px;
+    background: linear-gradient(90deg, #173244, #31d8ff, #7dffb7, #ffd56a); }
+  .bar-labels { display: flex; justify-content: space-between; width: 150px; font-size: 10px; }
+  #hud-br { bottom: 12px; right: 12px; display: flex; gap: 6px; pointer-events: auto; flex-wrap: wrap; justify-content: flex-end; }
+  .btn { font: inherit; font-size: 11px; color: var(--cyan); background: rgba(7,19,31,.75);
+    border: 1px solid var(--mid); border-radius: 6px; padding: 6px 10px; cursor: pointer; letter-spacing: .05em; }
+  .btn:hover { border-color: var(--cyan); box-shadow: 0 0 10px rgba(49,216,255,.35); }
+  #status.learning { color: var(--cyan); } #status.hunting { color: var(--green); } #status.found { color: var(--gold); }
+  #gl-error { position: absolute; inset: 0; display: none; place-items: center; text-align: center; padding: 24px; color: var(--dim); }
+
+  /* ---------- Terminal ---------- */
+  #terminal { background: radial-gradient(ellipse at center, #0b2233 0%, var(--bg) 75%); padding: 14px; }
+  .tty { position: relative; height: 100%; display: flex; flex-direction: column; border: 1px solid var(--mid);
+    border-radius: 10px; background: rgba(4,12,20,.85); box-shadow: 0 0 30px rgba(49,216,255,.12), inset 0 0 40px rgba(0,0,0,.6); overflow: hidden; }
+  .tty-bar { display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-bottom: 1px solid var(--line);
+    font-size: 11px; color: var(--dim); background: rgba(23,50,68,.4); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; } .d1 { background: #ff5d73; } .d2 { background: #ffd56a; } .d3 { background: #7dffb7; }
+  .tty-bar span { margin-left: 8px; }
+  #out { flex: 1; overflow-y: auto; padding: 12px 14px 4px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  #out::-webkit-scrollbar { width: 6px; } #out::-webkit-scrollbar-thumb { background: var(--mid); border-radius: 3px; }
+  .ln { min-height: 1.5em; }
+  .c-cyan { color: var(--cyan); } .c-green { color: var(--green); } .c-gold { color: var(--gold); }
+  .c-red { color: var(--red); } .c-dim { color: var(--dim); }
+  .glow { text-shadow: 0 0 6px currentColor; }
+  .map { color: var(--text); line-height: 1.25; letter-spacing: .12em; }
+  .map .w { color: var(--mid); } .map .t { color: var(--red); } .map .g { color: var(--gold); } .map .s { color: var(--green); }
+  .map .a { color: var(--bg); background: var(--cyan); } .map .p { color: var(--cyan); font-weight: 700; text-shadow: 0 0 6px var(--cyan); }
+  .prompt-row { display: flex; align-items: center; padding: 6px 14px 12px; font-size: 13px; }
+  .prompt { color: var(--green); white-space: nowrap; }
+  #cmd { flex: 1; min-width: 0; margin-left: 8px; background: transparent; border: 0; outline: 0;
+    color: var(--text); font: inherit; caret-color: var(--cyan); }
+  .scanlines { pointer-events: none; position: absolute; inset: 0;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px); }
+  .tty.glitch { animation: glitch .45s steps(2) 3; }
+  @keyframes glitch {
+    0% { transform: translate(0); filter: none; }
+    25% { transform: translate(-3px, 1px); filter: hue-rotate(60deg) saturate(2); }
+    50% { transform: translate(3px, -1px); filter: invert(.1); }
+    75% { transform: translate(-1px, 2px); filter: hue-rotate(-60deg); }
+    100% { transform: translate(0); filter: none; }
+  }
+  #matrix { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .4s; }
+  .audio-btn { margin-top: 6px; }
+  @media (max-width: 520px) {
+    #out, .prompt-row { font-size: 11.5px; }
+    .prompt .host { display: none; }
+    #hud-tr { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<section id="stage" aria-label="3D Q-learning treasure hunt">
+  <div class="hud" id="hud-tl">
+    <div class="title">◆ TREASURE HUNT · LIVE Q-LEARNING</div>
+    <div>EPISODE <b id="ep">0</b> / <span id="ep-max">0</span> · ε <b id="eps">1.00</b></div>
+    <div>STATUS <b id="status" class="learning">LEARNING</b></div>
+  </div>
+  <div class="hud" id="hud-tr">DRAG · ROTATE<br>SCROLL / PINCH · ZOOM<br>RIGHT-DRAG · PAN</div>
+  <div class="hud" id="hud-bl">
+    tile height &amp; color = max<sub>a</sub> Q(s, a)
+    <div class="bar"></div>
+    <div class="bar-labels"><span>low</span><span>high</span></div>
+  </div>
+  <div class="hud" id="hud-br">
+    <button class="btn" id="b-retrain">⟳ RETRAIN</button>
+    <button class="btn" id="b-rotate">⏸ AUTO-ROTATE</button>
+    <button class="btn" id="b-view">◎ RESET VIEW</button>
+  </div>
+  <div id="gl-error">3D view needs WebGL and an internet connection to load Three.js.</div>
+</section>
+
+<section id="terminal" aria-label="Mission terminal">
+  <div class="tty" id="tty">
+    <div class="tty-bar"><i class="dot d1"></i><i class="dot d2"></i><i class="dot d3"></i><span>mission-control — tty1 — 80×24</span></div>
+    <div id="out" role="log" aria-live="polite"></div>
+    <div class="prompt-row">
+      <span class="prompt"><span class="host">agent@treasure-hunt</span>:~$</span>
+      <input id="cmd" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="terminal command">
+    </div>
+    <div class="scanlines"></div>
+    <canvas id="matrix"></canvas>
+  </div>
+</section>
+
+<script>
+/* ===================== EDIT ME ===================== */
+// The decrypted message shown after `unlock <key>`.
+const SECRET_MESSAGE = 'The shortest path is not always the path with the greatest reward.';
+const SECRET_SIGNATURE = '— HW3 Treasure Hunt';
+// Optional: put an audio file next to index.html (e.g. 'secret.mp3') or a public https URL.
+// Leave empty to hide the play button.
+const AUDIO_URL = '';
+/* =================================================== */
+
+const VIEW = new URLSearchParams(location.search).get('view'); // '3d' | 'terminal' | null (both)
+if (VIEW === '3d') { document.getElementById('terminal').hidden = true; document.body.classList.add('single'); }
+if (VIEW === 'terminal') { document.getElementById('stage').hidden = true; document.body.classList.add('single'); }
+
+/*QL-START*/
+// A tiny, real tabular Q-learning environment shared by the 3D view and the terminal.
+const QL = (() => {
+  // S start · G treasure · # wall · T trap · . floor   (10 × 12, same size as the HW3 small map)
+  const MAP = [
+    'S..#........',
+    '.#.#.###.T#.',
+    '.#...#...#..',
+    '.##T##.#.#.#',
+    '......#....#',
+    '.T#.###.##..',
+    '..#...T.#...',
+    '#.###.#.#.##',
+    '..T...#....T',
+    '.##.#...##.G',
+  ];
+  const R = MAP.length, C = MAP[0].length, N = R * C;
+  const DIRS = [[-1, 0], [0, 1], [1, 0], [0, -1]];
+  const ARROWS = '↑→↓←';
+  let start = 0, goal = 0;
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+    if (MAP[r][c] === 'S') start = r * C + c;
+    if (MAP[r][c] === 'G') goal = r * C + c;
+  }
+  const at = s => MAP[Math.floor(s / C)][s % C];
+
+  function step(s, a) {
+    const r = Math.floor(s / C) + DIRS[a][0], c = (s % C) + DIRS[a][1];
+    if (r < 0 || r >= R || c < 0 || c >= C || MAP[r][c] === '#') return { s2: s, rew: -2, done: false };
+    const s2 = r * C + c, ch = MAP[r][c];
+    if (ch === 'G') return { s2, rew: 100, done: true };
+    if (ch === 'T') return { s2, rew: -50, done: true };
+    return { s2, rew: -1, done: false };
+  }
+
+  function mulberry32(seed) {
+    return () => {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function bfsShortest() {
+    const dist = new Array(N).fill(-1); dist[start] = 0; const q = [start];
+    while (q.length) {
+      const s = q.shift();
+      for (let a = 0; a < 4; a++) {
+        const { s2 } = step(s, a);
+        if (s2 === s || dist[s2] >= 0 || at(s2) === 'T') continue;
+        dist[s2] = dist[s] + 1; q.push(s2);
+      }
+    }
+    return dist[goal];
+  }
+
+  function createAgent(opts = {}) {
+    const p = { alpha: 0.5, gamma: 0.95, epsStart: 1, epsMin: 0.05, epsDecay: 0.985, maxSteps: 300,
+      seed: (Math.random() * 1e9) | 0, ...opts };
+    const rng = mulberry32(p.seed);
+    const Q = new Float32Array(N * 4);
+    const visited = new Uint8Array(N);
+    let eps = p.epsStart, episode = 0;
+
+    const maxQ = s => Math.max(Q[s * 4], Q[s * 4 + 1], Q[s * 4 + 2], Q[s * 4 + 3]);
+    function argmax(s, randomTies) {
+      const m = maxQ(s), best = [];
+      for (let a = 0; a < 4; a++) if (Q[s * 4 + a] === m) best.push(a);
+      return randomTies ? best[Math.floor(rng() * best.length)] : best[0];
+    }
+
+    function runEpisode() {
+      let s = start, ret = 0, t = 0, outcome = 'timeout';
+      visited[s] = 1;
+      for (; t < p.maxSteps; t++) {
+        const a = rng() < eps ? Math.floor(rng() * 4) : argmax(s, true);
+        const { s2, rew, done } = step(s, a);
+        const target = rew + (done ? 0 : p.gamma * maxQ(s2));
+        Q[s * 4 + a] += p.alpha * (target - Q[s * 4 + a]);
+        visited[s2] = 1; ret += rew; s = s2;
+        if (done) { outcome = at(s) === 'G' ? 'goal' : 'trap'; t++; break; }
+      }
+      episode++;
+      eps = Math.max(p.epsMin, eps * p.epsDecay);
+      return { ret, steps: t, outcome };
+    }
+
+    // Greedy rollout from S. Returns the list of states, and whether it reached G.
+    function greedyPath() {
+      const path = [start], seen = new Set([start]);
+      let s = start;
+      for (let i = 0; i < N; i++) {
+        const { s2, done } = step(s, argmax(s, false));
+        path.push(s2);
+        if (done) return { path, ok: at(s2) === 'G' };
+        if (seen.has(s2)) return { path, ok: false };
+        seen.add(s2); s = s2;
+      }
+      return { path, ok: false };
+    }
+
+    return {
+      Q, visited, params: p, maxQ, runEpisode, greedyPath,
+      bestAction: s => argmax(s, false),
+      get episode() { return episode; }, get eps() { return eps; },
+    };
+  }
+
+  return { MAP, R, C, N, DIRS, ARROWS, start, goal, at, step, createAgent, bfsShortest };
+})();
+/*QL-END*/
+</script>
+
+<!-- ===================== Terminal ===================== -->
+<script>
+(() => {
+  if (VIEW === '3d') return;
+  const out = document.getElementById('out');
+  const input = document.getElementById('cmd');
+  const tty = document.getElementById('tty');
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const history = []; let hIdx = 0, busy = false;
+  let agent = null, lastPathLen = null, unlocked = false;
+
+  const scroll = () => { out.scrollTop = out.scrollHeight; };
+  function print(text = '', cls = '') {
+    const d = document.createElement('div');
+    d.className = 'ln ' + cls; d.textContent = text;
+    out.appendChild(d); scroll(); return d;
+  }
+  async function type(text, cls = '', speed = 14) {
+    const d = print('', cls);
+    for (const ch of text) { d.textContent += ch; scroll(); await sleep(speed); }
+    return d;
+  }
+  function esc(s) { return s.replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[m]); }
+
+  // Render the map as colored HTML. `overlay` maps state → char; `agentAt` highlights one cell.
+  function mapHTML(overlay = {}, agentAt = -1, trail = new Set()) {
+    const { MAP, R, C } = QL; let html = '';
+    for (let r = 0; r < R; r++) {
+      html += '  ';
+      for (let c = 0; c < C; c++) {
+        const s = r * C + c, ch = MAP[r][c];
+        if (s === agentAt) { html += '<span class="a">@</span> '; continue; }
+        const cls = { '#': 'w', 'T': 't', 'G': 'g', 'S': 's' }[ch] || (trail.has(s) ? 'p' : '');
+        const shown = ch === '#' ? '█' : ch === '.' ? (overlay[s] ?? (trail.has(s) ? '◆' : '·')) : ch;
+        html += `<span class="${cls}">${esc(shown)}</span> `;
+      }
+      html += '\n';
+    }
+    return html;
+  }
+  function printMap(overlay, agentAt, trail) {
+    const d = print('', 'map'); d.innerHTML = mapHTML(overlay, agentAt, trail); scroll(); return d;
+  }
+
+  const COMMANDS = {
+    help() {
+      print('AVAILABLE COMMANDS', 'c-gold');
+      [['scan', 'scan the environment'],
+       ['train [n]', 'run real Q-learning for n episodes (default 400)'],
+       ['launch', 'send the trained agent on the hunt'],
+       ['unlock <key>', 'decrypt the hidden payload'],
+       ['status', 'show agent status'],
+       ['clear', 'clear the screen'],
+      ].forEach(([c, d]) => print(`  ${c.padEnd(14)} ${d}`));
+      print('  (there may be a few undocumented commands…)', 'c-dim');
+    },
+
+    async scan() {
+      await type('[SCAN] sweeping sector 10×12 ...', 'c-cyan');
+      const bar = print('');
+      for (let i = 0; i <= 24; i++) { bar.textContent = '  [' + '▓'.repeat(i) + '░'.repeat(24 - i) + `] ${Math.round(i / 24 * 100)}%`; await sleep(35); }
+      const { MAP } = QL; const all = MAP.join('');
+      printMap();
+      print(`  S start   G treasure   █ wall ×${(all.match(/#/g) || []).length}   T trap ×${(all.match(/T/g) || []).length}`, 'c-dim');
+      await sleep(200);
+      print('  ⚠ encrypted payload detected at G', 'c-gold glow');
+      print('  shortest safe path: UNKNOWN — the agent has to learn it.  try: train', 'c-dim');
+    },
+
+    async train(arg) {
+      const n = Math.min(Math.max(parseInt(arg, 10) || 400, 1), 5000);
+      agent = QL.createAgent(); lastPathLen = null;
+      const p = agent.params;
+      print(`[TRAIN] α=${p.alpha}  γ=${p.gamma}  ε: ${p.epsStart}→${p.epsMin} (×${p.epsDecay}/ep)  episodes=${n}`, 'c-cyan');
+      const line = print('');
+      let goals = 0, traps = 0, recent = [];
+      for (let e = 0; e < n; e++) {
+        const r = agent.runEpisode();
+        if (r.outcome === 'goal') goals++; if (r.outcome === 'trap') traps++;
+        recent.push(r.ret); if (recent.length > 50) recent.shift();
+        if (e % 10 === 9 || e === n - 1) {
+          const k = Math.round((e + 1) / n * 24);
+          const avg = recent.reduce((x, y) => x + y, 0) / recent.length;
+          line.textContent = `  [${'█'.repeat(k)}${'░'.repeat(24 - k)}] ${String(e + 1).padStart(4)}/${n}  ε=${agent.eps.toFixed(2)}  avg return(50)=${avg.toFixed(1).padStart(6)}`;
+          scroll(); await sleep(16);
+        }
+      }
+      print(`  episodes reaching G: ${goals}   hitting traps: ${traps}`, 'c-dim');
+      print('  learned greedy policy  π(s) = argmaxₐ Q(s,a):', 'c-green');
+      const overlay = {};
+      for (let s = 0; s < QL.N; s++) if (agent.visited[s]) overlay[s] = QL.ARROWS[agent.bestAction(s)];
+      printMap(overlay);
+      print('  next: launch', 'c-dim');
+    },
+
+    async launch() {
+      if (!agent) { print('ERROR: Q-table is empty. Run `train` first.', 'c-red'); return; }
+      const { path, ok } = agent.greedyPath();
+      await type('[LAUNCH] agent deployed. following greedy policy ...', 'c-cyan');
+      const trail = new Set(); const m = printMap({}, path[0], trail);
+      for (let i = 1; i < path.length; i++) {
+        trail.add(path[i - 1]);
+        m.innerHTML = mapHTML({}, path[i], trail); scroll();
+        await sleep(110);
+      }
+      const steps = path.length - 1;
+      if (!ok) {
+        print(`✗ agent got lost after ${steps} steps. it needs more experience.  try: train 1500`, 'c-red');
+        return;
+      }
+      lastPathLen = steps;
+      const best = QL.bfsShortest();
+      print(`✓ TREASURE ACQUIRED in ${steps} steps` + (steps === best ? '  (optimal!)' : `  (optimal is ${best})`), 'c-gold glow');
+      await type('  payload is locked. the key is the number of steps of the shortest safe path.', 'c-dim', 8);
+      print(`  hint: unlock ${steps === best ? steps : '<n>'}`, 'c-dim');
+    },
+
+    async unlock(arg) {
+      if (!arg) { print('usage: unlock <key>', 'c-dim'); return; }
+      if (parseInt(arg, 10) !== QL.bfsShortest()) {
+        print('ACCESS DENIED ✗  wrong key.', 'c-red');
+        tty.classList.remove('glitch'); void tty.offsetWidth; tty.classList.add('glitch');
+        return;
+      }
+      tty.classList.remove('glitch'); void tty.offsetWidth; tty.classList.add('glitch');
+      await type('ACCESS GRANTED ✓  decrypting payload ...', 'c-green glow');
+      await decrypt(SECRET_MESSAGE, 'c-gold glow');
+      print(SECRET_SIGNATURE, 'c-dim');
+      unlocked = true;
+      if (AUDIO_URL) {
+        const b = document.createElement('button');
+        b.className = 'btn audio-btn'; b.textContent = '▶ PLAY TRANSMISSION';
+        const audio = new Audio(AUDIO_URL);
+        b.onclick = () => { if (audio.paused) { audio.play(); b.textContent = '❚❚ PAUSE'; } else { audio.pause(); b.textContent = '▶ PLAY TRANSMISSION'; } };
+        audio.onended = () => { b.textContent = '▶ PLAY TRANSMISSION'; };
+        out.appendChild(b); scroll();
+      }
+    },
+
+    status() {
+      if (!agent) { print('agent: IDLE · Q-table empty', 'c-dim'); return; }
+      const visited = agent.visited.reduce((a, b) => a + b, 0);
+      print(`agent: TRAINED · episodes=${agent.episode} · ε=${agent.eps.toFixed(3)} · states visited=${visited}/${QL.N}`, 'c-cyan');
+      print(`last hunt: ${lastPathLen ?? '—'} steps · payload: ${unlocked ? 'DECRYPTED' : 'LOCKED'}`, 'c-dim');
+    },
+
+    clear() { out.innerHTML = ''; },
+
+    // ---- easter eggs ----
+    whoami() { print('agent-007 · tabular Q-learner · 120 states × 4 actions'); },
+    ls() { print('mission.txt   q_table.npy   payload.enc'); },
+    cat(arg) {
+      if (arg === 'mission.txt') print('Collect the treasure. Avoid the traps. Reach G.\nBalance exploration and exploitation.');
+      else if (arg === 'payload.enc') print(Array.from({ length: 64 }, () => '0123456789abcdef'[Math.random() * 16 | 0]).join(''), 'c-dim');
+      else if (arg === 'q_table.npy') print('binary file. try: status', 'c-dim');
+      else print(`cat: ${arg || ''}: No such file`, 'c-red');
+    },
+    sudo() { print('nice try. reward −50.', 'c-red'); },
+    hint() { print('scan → train → launch → unlock', 'c-dim'); },
+    gamma() { print('γ ≈ 0 : only today matters.   γ → 1 : the future matters as much as now.', 'c-cyan'); },
+    async matrix() { await matrixRain(3000); },
+    exit() { print('there is no exit. only the goal.', 'c-dim'); },
+  };
+
+  async function decrypt(text, cls) {
+    const d = print('', cls); const glyphs = '!<>-_\\/[]{}—=+*^?#01ABCDEFαβγεπ';
+    for (let i = 0; i <= text.length; i += 1) {
+      for (let k = 0; k < 2; k++) {
+        d.textContent = text.slice(0, i) + Array.from(text.slice(i, i + 12), ch => ch === ' ' ? ' ' : glyphs[Math.random() * glyphs.length | 0]).join('');
+        scroll(); await sleep(18);
+      }
+    }
+    d.textContent = text;
+  }
+
+  async function matrixRain(ms) {
+    const cv = document.getElementById('matrix'), ctx = cv.getContext('2d');
+    cv.width = tty.clientWidth; cv.height = tty.clientHeight; cv.style.opacity = 1;
+    const fs = 14, cols = Math.floor(cv.width / fs), drops = Array(cols).fill(0).map(() => Math.random() * -40);
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) {
+      ctx.fillStyle = 'rgba(4,12,20,.18)'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.fillStyle = '#7dffb7'; ctx.font = fs + 'px JetBrains Mono, monospace';
+      drops.forEach((y, i) => {
+        ctx.fillText('QSGT01αγε←↑→↓'[Math.random() * 14 | 0], i * fs, y * fs);
+        drops[i] = y * fs > cv.height && Math.random() > .95 ? 0 : y + 1;
+      });
+      await sleep(40);
+    }
+    cv.style.opacity = 0; await sleep(400); ctx.clearRect(0, 0, cv.width, cv.height);
+  }
+
+  async function run(raw) {
+    const line = raw.trim();
+    const echo = print(''); echo.innerHTML = `<span class="c-green">agent@treasure-hunt:~$</span> ${esc(line)}`;
+    if (!line) return;
+    history.push(line); hIdx = history.length;
+    const [name, ...args] = line.split(/\s+/);
+    const fn = COMMANDS[name.toLowerCase()];
+    if (!fn) { print(`command not found: ${name}.  type help`, 'c-red'); return; }
+    busy = true; input.disabled = true;
+    try { await fn(args.join(' ')); } finally { busy = false; input.disabled = false; input.focus({ preventScroll: true }); }
+  }
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !busy) { const v = input.value; input.value = ''; run(v); }
+    else if (e.key === 'ArrowUp') { if (hIdx > 0) input.value = history[--hIdx]; e.preventDefault(); }
+    else if (e.key === 'ArrowDown') { hIdx = Math.min(hIdx + 1, history.length); input.value = history[hIdx] || ''; e.preventDefault(); }
+    else if (e.key === 'Tab') {
+      e.preventDefault();
+      const hit = Object.keys(COMMANDS).filter(c => c.startsWith(input.value.toLowerCase()));
+      if (hit.length === 1) input.value = hit[0] + ' ';
+    } else if (e.key === 'l' && e.ctrlKey) { e.preventDefault(); out.innerHTML = ''; }
+  });
+  tty.addEventListener('click', () => { if (!getSelection().toString()) input.focus({ preventScroll: true }); });
+
+  (async () => {
+    const boot = [
+      ['MISSION CONTROL OS v3.0 — Treasure Hunt Division', 'c-gold glow'],
+      ['[ OK ] loading environment 10×12 ............', 'c-dim'],
+      ['[ OK ] initializing Q-table (120 × 4) ........', 'c-dim'],
+      ['[ OK ] ε-greedy explorer online ..............', 'c-dim'],
+      ['[WARN] encrypted payload detected', 'c-gold'],
+    ];
+    for (const [t, c] of boot) { print(t, c); await sleep(140); }
+    print('');
+    print('Type `help` to begin.  (Tab completes, ↑ recalls history)', 'c-cyan');
+  })();
+})();
+</script>
+
+<!-- ===================== 3D view ===================== -->
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+if (VIEW !== 'terminal') {
+  try { await init3D(); }
+  catch (err) { console.error(err); document.getElementById('gl-error').style.display = 'grid'; }
+}
+
+async function init3D() {
+  const THREE = await import('three');
+  const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+
+  const stage = document.getElementById('stage');
+  const { R, C, N, MAP, start, goal } = QL;
+  const EPISODES = 360, EP_PER_SEC = 60; let epBudget = 0;
+
+  // ---------- renderer / scene / camera ----------
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  stage.prepend(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x07131f);
+  scene.fog = new THREE.Fog(0x07131f, 22, 48);
+
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+  const HOME = new THREE.Vector3(8.5, 11, 13.5);
+  camera.position.copy(HOME);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+  controls.autoRotate = true; controls.autoRotateSpeed = 0.7;
+  controls.minDistance = 6; controls.maxDistance = 34;
+  controls.maxPolarAngle = Math.PI * 0.47;
+  controls.target.set(0, 0, 0);
+
+  scene.add(new THREE.HemisphereLight(0x9fdcff, 0x07131f, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(6, 14, 8); scene.add(sun);
+
+  const pos = (s, y = 0) => new THREE.Vector3((s % C) - C / 2 + 0.5, y, Math.floor(s / C) - R / 2 + 0.5);
+
+  // ---------- platform ----------
+  const base = new THREE.Mesh(new THREE.BoxGeometry(C + 0.8, 0.3, R + 0.8),
+    new THREE.MeshStandardMaterial({ color: 0x0b1c2b, roughness: 0.8, metalness: 0.2 }));
+  base.position.y = -0.22; scene.add(base);
+  const baseEdge = new THREE.LineSegments(new THREE.EdgesGeometry(base.geometry),
+    new THREE.LineBasicMaterial({ color: 0x31d8ff, transparent: true, opacity: 0.55 }));
+  baseEdge.position.copy(base.position); scene.add(baseEdge);
+
+  // ---------- tiles, walls, traps ----------
+  const tiles = new Array(N).fill(null);
+  const tileGeo = new THREE.BoxGeometry(0.9, 1, 0.9);
+  const wallGeo = new THREE.BoxGeometry(0.96, 0.8, 0.96);
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x0e2232, roughness: 0.6, metalness: 0.4 });
+  const wallEdgeMat = new THREE.LineBasicMaterial({ color: 0x31d8ff, transparent: true, opacity: 0.7 });
+  const spikeGeo = new THREE.ConeGeometry(0.09, 0.38, 6);
+  const spikeMat = new THREE.MeshStandardMaterial({ color: 0xff5d73, emissive: 0xff2244, emissiveIntensity: 0.6 });
+  const arrowGeo = new THREE.ConeGeometry(0.11, 0.3, 4); arrowGeo.rotateX(-Math.PI / 2); // points toward −z
+  const arrowMat = new THREE.MeshStandardMaterial({ color: 0xe7f5ff, emissive: 0x31d8ff, emissiveIntensity: 0.5 });
+  const arrows = new Array(N).fill(null);
+
+  for (let s = 0; s < N; s++) {
+    const ch = MAP[Math.floor(s / C)][s % C];
+    if (ch === '#') {
+      const w = new THREE.Mesh(wallGeo, wallMat); w.position.copy(pos(s, 0.4)); scene.add(w);
+      const e = new THREE.LineSegments(new THREE.EdgesGeometry(wallGeo), wallEdgeMat); e.position.copy(w.position); scene.add(e);
+      continue;
+    }
+    const mat = new THREE.MeshStandardMaterial({ color: 0x173244, roughness: 0.5, metalness: 0.2, emissive: 0x000000 });
+    const t = new THREE.Mesh(tileGeo, mat); t.scale.y = 0.1; t.position.copy(pos(s, -0.02)); scene.add(t);
+    tiles[s] = t;
+    if (ch === 'T') {
+      mat.color.set(0x3a1622);
+      for (const [dx, dz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2], [0, 0]]) {
+        const sp = new THREE.Mesh(spikeGeo, spikeMat); sp.position.copy(pos(s, 0.22)).add(new THREE.Vector3(dx, 0, dz)); scene.add(sp);
+      }
+    } else if (ch === '.' || ch === 'S') {
+      const a = new THREE.Mesh(arrowGeo, arrowMat); a.visible = false; scene.add(a); arrows[s] = a;
+    }
+  }
+
+  // start ring
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.04, 8, 40),
+    new THREE.MeshStandardMaterial({ color: 0x7dffb7, emissive: 0x7dffb7, emissiveIntensity: 0.8 }));
+  ring.rotation.x = Math.PI / 2; ring.position.copy(pos(start, 0.06)); scene.add(ring);
+
+  // ---------- treasure chest ----------
+  const chest = new THREE.Group(); chest.position.copy(pos(goal, 0.05)); scene.add(chest);
+  const wood = new THREE.MeshStandardMaterial({ color: 0x7a4a1a, roughness: 0.7 });
+  const gold = new THREE.MeshStandardMaterial({ color: 0xffd56a, metalness: 0.9, roughness: 0.25, emissive: 0x6b4a00, emissiveIntensity: 0.4 });
+  const cBody = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.32, 0.44), wood); cBody.position.y = 0.16; chest.add(cBody);
+  const band = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.06, 0.46), gold); band.position.y = 0.3; chest.add(band);
+  const lidPivot = new THREE.Group(); lidPivot.position.set(0, 0.32, -0.22); chest.add(lidPivot);
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.62, 16, 1, false, 0, Math.PI), wood);
+  lid.rotation.z = Math.PI / 2; lid.rotation.y = Math.PI / 2; lid.position.z = 0.22; lidPivot.add(lid);
+  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.17),
+    new THREE.MeshStandardMaterial({ color: 0xffd56a, emissive: 0xffb000, emissiveIntensity: 1.2, metalness: 0.4, roughness: 0.1 }));
+  gem.position.y = 0.95; chest.add(gem);
+  const goalLight = new THREE.PointLight(0xffd56a, 6, 4); goalLight.position.y = 0.8; chest.add(goalLight);
+
+  // ---------- drone ----------
+  const drone = new THREE.Group(); scene.add(drone);
+  const shell = new THREE.MeshStandardMaterial({ color: 0xe7f5ff, metalness: 0.6, roughness: 0.25 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x173244, metalness: 0.5, roughness: 0.4 });
+  const glowC = new THREE.MeshStandardMaterial({ color: 0x31d8ff, emissive: 0x31d8ff, emissiveIntensity: 1.6 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.24, 24, 16), shell); body.scale.set(1, 0.55, 1.2); drone.add(body);
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 12), glowC); eye.position.set(0, 0, -0.27); drone.add(eye);
+  const rotors = [];
+  for (const k of [0, 1]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.04, 0.06), dark);
+    arm.rotation.y = Math.PI / 4 + k * Math.PI / 2; drone.add(arm);
+  }
+  for (const [x, z] of [[0.36, 0.36], [-0.36, 0.36], [0.36, -0.36], [-0.36, -0.36]]) {
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.08, 10), dark); hub.position.set(x, 0.04, z); drone.add(hub);
+    const rotor = new THREE.Group(); rotor.position.set(x, 0.09, z); drone.add(rotor);
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.01, 0.05), shell); rotor.add(blade);
+    const blade2 = blade.clone(); blade2.rotation.y = Math.PI / 2; rotor.add(blade2);
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(0.22, 24),
+      new THREE.MeshBasicMaterial({ color: 0x31d8ff, transparent: true, opacity: 0.12, side: THREE.DoubleSide }));
+    disc.rotation.x = -Math.PI / 2; rotor.add(disc); rotors.push(rotor);
+  }
+  const droneLight = new THREE.PointLight(0x31d8ff, 3, 3); droneLight.position.y = -0.3; drone.add(droneLight);
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 24, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0x31d8ff, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+  beam.position.y = -0.6; drone.add(beam);
+  const HOVER = 1.25;
+  drone.position.copy(pos(start, HOVER)); drone.scale.setScalar(1.35);
+
+  // ---------- stars ----------
+  const starGeo = new THREE.BufferGeometry(); const sp = [];
+  for (let i = 0; i < 700; i++) {
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(30 + Math.random() * 30);
+    if (v.y < -4) v.y = -v.y; sp.push(v.x, v.y, v.z);
+  }
+  starGeo.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+  scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0x9fdcff, size: 0.12, transparent: true, opacity: 0.8 })));
+
+  // ---------- sparkles for the win ----------
+  const sparkN = 80, sparkPos = new Float32Array(sparkN * 3), sparkVel = [];
+  const sparkGeo = new THREE.BufferGeometry(); sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+  const sparks = new THREE.Points(sparkGeo, new THREE.PointsMaterial({ color: 0xffd56a, size: 0.09, transparent: true, opacity: 0 }));
+  scene.add(sparks);
+  function burst() {
+    const o = pos(goal, 0.6);
+    sparkVel.length = 0;
+    for (let i = 0; i < sparkN; i++) {
+      sparkPos.set([o.x, o.y, o.z], i * 3);
+      sparkVel.push(new THREE.Vector3().randomDirection().multiplyScalar(1 + Math.random() * 2).add(new THREE.Vector3(0, 2, 0)));
+    }
+    sparks.material.opacity = 1;
+  }
+
+  // ---------- Q-learning state ----------
+  const $ = id => document.getElementById(id);
+  const hudEp = $('ep'), hudEps = $('eps'), hudStatus = $('status');
+  $('ep-max').textContent = EPISODES;
+  let agent, phase, path, pathT, winT, trailSet, target;
+  const c0 = new THREE.Color(0x173244), c1 = new THREE.Color(0x31d8ff), c2 = new THREE.Color(0x7dffb7), c3 = new THREE.Color(0xffd56a);
+  const ramp = (t, out) => t < 0.5 ? out.copy(c0).lerp(c1, t / 0.5) : t < 0.8 ? out.copy(c1).lerp(c2, (t - 0.5) / 0.3) : out.copy(c2).lerp(c3, (t - 0.8) / 0.2);
+
+  function setStatus(text, cls) { hudStatus.textContent = text; hudStatus.className = cls; }
+  function reset() {
+    agent = QL.createAgent(); phase = 'learn'; path = null; trailSet = new Set();
+    drone.position.copy(pos(start, HOVER)); lidPivot.rotation.x = 0; beam.visible = true;
+    setStatus('LEARNING', 'learning');
+  }
+
+  const tmpC = new THREE.Color();
+  function paintValues() {
+    let lo = Infinity, hi = -Infinity;
+    for (let s = 0; s < N; s++) if (tiles[s] && agent.visited[s] && QL.at(s) !== 'T' && s !== goal) {
+      const v = agent.maxQ(s); lo = Math.min(lo, v); hi = Math.max(hi, v);
+    }
+    const span = hi - lo || 1;
+    for (let s = 0; s < N; s++) {
+      const t = tiles[s]; if (!t || QL.at(s) === 'T') continue;
+      let k = 0;
+      if (s === goal) k = 1;
+      else if (agent.visited[s]) k = Math.min(1, Math.max(0, (agent.maxQ(s) - lo) / span));
+      ramp(k, tmpC);
+      const onTrail = trailSet.has(s);
+      t.material.color.lerp(onTrail ? c3 : tmpC, 0.25);
+      t.material.emissive.copy(onTrail ? c3 : tmpC).multiplyScalar(onTrail ? 0.35 : 0.18 * k);
+      const h = 0.1 + (agent.visited[s] ? k * 0.45 : 0);
+      t.scale.y += (h - t.scale.y) * 0.2; t.position.y = t.scale.y / 2 - 0.07;
+      const a = arrows[s];
+      if (a) {
+        a.visible = !!agent.visited[s] && (phase !== 'learn' || agent.episode > 30);
+        a.rotation.y = -agent.bestAction(s) * Math.PI / 2;
+        a.position.set(t.position.x, t.scale.y - 0.07 + 0.08, t.position.z);
+      }
+    }
+  }
+
+  // ---------- controls ----------
+  $('b-retrain').onclick = reset;
+  $('b-rotate').onclick = e => {
+    controls.autoRotate = !controls.autoRotate;
+    e.currentTarget.textContent = (controls.autoRotate ? '⏸' : '▶') + ' AUTO-ROTATE';
+  };
+  $('b-view').onclick = () => { camera.position.copy(HOME); controls.target.set(0, 0, 0); };
+
+  function resize() {
+    const w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false); camera.aspect = w / h;
+    camera.position.copy(HOME).multiplyScalar(w / h < 1 ? 1.5 : 1); // pull back on tall/narrow screens
+    camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(stage); resize();
+
+  let visible = true;
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(stage);
+
+  // ---------- main loop ----------
+  reset();
+  const clock = new THREE.Clock(); let time = 0;
+  renderer.setAnimationLoop(() => {
+    const dt = Math.min(clock.getDelta(), 0.05);
+    if (!visible) return;
+    time += dt;
+
+    if (phase === 'learn') {
+      epBudget = Math.min(epBudget + dt * EP_PER_SEC, 20);
+      while (epBudget >= 1 && agent.episode < EPISODES) { agent.runEpisode(); epBudget--; }
+      drone.rotation.y += dt * 1.5;
+      if (agent.episode >= EPISODES) {
+        const g = agent.greedyPath();
+        if (g.ok) { path = g.path; pathT = 0; phase = 'hunt'; beam.visible = false; setStatus(`HUNTING · ${path.length - 1} STEPS`, 'hunting'); }
+        else { agent.runEpisode(); } // keep learning until the greedy path works
+      }
+    } else if (phase === 'hunt') {
+      pathT += dt * 3.2;
+      const i = Math.min(Math.floor(pathT), path.length - 1), f = pathT - i;
+      const a = pos(path[i], HOVER), b = pos(path[Math.min(i + 1, path.length - 1)], HOVER);
+      drone.position.lerpVectors(a, b, Math.min(f, 1));
+      trailSet.add(path[i]);
+      if (!b.equals(a)) {
+        const want = Math.atan2(-(b.x - a.x), -(b.z - a.z));
+        let d = want - drone.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d));
+        drone.rotation.y += d * Math.min(1, dt * 10);
+      }
+      if (pathT >= path.length - 1) { phase = 'win'; winT = 0; burst(); setStatus('TREASURE FOUND ✦', 'found'); }
+    } else if (phase === 'win') {
+      winT += dt;
+      lidPivot.rotation.x += (-1.9 - lidPivot.rotation.x) * Math.min(1, dt * 4);
+      if (winT > 3) { phase = 'hunt'; pathT = 0; trailSet.clear(); lidPivot.rotation.x = 0; setStatus(`HUNTING · ${path.length - 1} STEPS`, 'hunting'); }
+    }
+
+    // ambient motion
+    drone.position.y = HOVER + Math.sin(time * 2.4) * 0.07;
+    drone.rotation.z = Math.sin(time * 1.7) * 0.06;
+    rotors.forEach((r, k) => { r.rotation.y += dt * (k % 2 ? 40 : -40); });
+    gem.rotation.y += dt * 1.6; gem.position.y = 0.95 + Math.sin(time * 2) * 0.08 + (phase === 'win' ? Math.min(winT, 1) * 0.5 : 0);
+    ring.scale.setScalar(1 + Math.sin(time * 3) * 0.08);
+    beam.material.opacity = 0.08 + Math.sin(time * 6) * 0.04;
+    if (sparks.material.opacity > 0) {
+      for (let i = 0; i < sparkN; i++) {
+        sparkVel[i].y -= dt * 4;
+        sparkPos[i * 3] += sparkVel[i].x * dt; sparkPos[i * 3 + 1] += sparkVel[i].y * dt; sparkPos[i * 3 + 2] += sparkVel[i].z * dt;
+      }
+      sparkGeo.attributes.position.needsUpdate = true;
+      sparks.material.opacity = Math.max(0, sparks.material.opacity - dt * 0.5);
+    }
+
+    paintValues();
+    hudEp.textContent = Math.min(agent.episode, EPISODES);
+    hudEps.textContent = agent.eps.toFixed(2);
+    controls.update();
+    renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>
